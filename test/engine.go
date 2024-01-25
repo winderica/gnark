@@ -781,3 +781,11 @@ func (e *engine) MustBeLessOrEqCst(aBits []frontend.Variable, bound *big.Int, aF
 		panic(fmt.Sprintf("%d > %d", v, bound))
 	}
 }
+
+func (engine *engine) GetNbConstraints() int {
+	n := 0
+	for _, bp := range engine.blueprints {
+		n += bp.NbConstraints()
+	}
+	return n
+}
