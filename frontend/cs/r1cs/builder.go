@@ -507,3 +507,7 @@ func (builder *builder) ToCanonicalVariable(in frontend.Variable) frontend.Canon
 		return constraint.LinearExpression{term}
 	}
 }
+
+func (builder *builder) GetNbConstraints() int {
+	return builder.cs.GetNbConstraints()
+}

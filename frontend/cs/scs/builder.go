@@ -686,3 +686,7 @@ func (builder *builder) ToCanonicalVariable(v frontend.Variable) frontend.Canoni
 		return term
 	}
 }
+
+func (builder *builder) GetNbConstraints() int {
+	return builder.cs.GetNbConstraints()
+}

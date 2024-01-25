@@ -17,7 +17,7 @@ type CheckCircuit struct {
 }
 
 func (c *CheckCircuit) Define(api frontend.API) error {
-	r := newCommitRangechecker(api)
+	r := newCommitRangechecker(api, 0)
 	for i := range c.Vals {
 		r.Check(c.Vals[i], c.bits)
 	}

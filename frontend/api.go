@@ -147,6 +147,8 @@ type API interface {
 	// ConstantValue is a shortcut to api.Compiler().ConstantValue()
 	// Deprecated: use api.Compiler().ConstantValue() instead
 	ConstantValue(v Variable) (*big.Int, bool)
+
+	GetNbConstraints() int
 }
 
 // BatchInvert returns a slice of variables containing the inverse of each element in i1

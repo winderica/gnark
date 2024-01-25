@@ -26,9 +26,10 @@ type checkedVariable struct {
 type commitChecker struct {
 	collected []checkedVariable
 	closed    bool
+	size      int
 }
 
-func newCommitRangechecker(api frontend.API) *commitChecker {
+func newCommitRangechecker(api frontend.API, size int) *commitChecker {
 	kv, ok := api.Compiler().(kvstore.Store)
 	if !ok {
 		panic("builder should implement key-value store")
@@ -41,7 +42,7 @@ func newCommitRangechecker(api frontend.API) *commitChecker {
 			panic("stored rangechecker is not valid")
 		}
 	}
-	cht := &commitChecker{}
+	cht := &commitChecker{ size: size }
 	kv.SetKeyValue(ctxCheckerKey{}, cht)
 	api.Compiler().Defer(cht.commit)
 	return cht
@@ -70,7 +71,10 @@ func (c *commitChecker) commit(api frontend.API) error {
 	if len(c.collected) == 0 {
 		return nil
 	}
-	baseLength := c.getOptimalBasewidth(api)
+	baseLength := c.size
+	if baseLength <= 0 {
+		baseLength = c.getOptimalBasewidth(api)
+	}
 	// decompose into smaller limbs
 	decomposed := make([]frontend.Variable, 0, len(c.collected))
 	collected := make([]frontend.Variable, len(c.collected))

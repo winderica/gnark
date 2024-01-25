@@ -26,7 +26,17 @@ func New(api frontend.API) frontend.Rangechecker {
 		return rc
 	}
 	if _, ok := api.(frontend.Committer); ok {
-		return newCommitRangechecker(api)
+		return newCommitRangechecker(api, 0)
+	}
+	return plainChecker{api: api}
+}
+
+func NewSized(api frontend.API, size int) frontend.Rangechecker {
+	if rc, ok := api.(frontend.Rangechecker); ok {
+		return rc
+	}
+	if _, ok := api.(frontend.Committer); ok {
+		return newCommitRangechecker(api, size)
 	}
 	return plainChecker{api: api}
 }
