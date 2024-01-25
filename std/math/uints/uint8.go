@@ -26,7 +26,7 @@ import (
 	"fmt"
 
 	"github.com/consensys/gnark/frontend"
-	"github.com/consensys/gnark/std/internal/logderivprecomp"
+	"github.com/consensys/gnark/std/logderivprecomp"
 	"github.com/consensys/gnark/std/math/bitslice"
 	"github.com/consensys/gnark/std/rangecheck"
 )

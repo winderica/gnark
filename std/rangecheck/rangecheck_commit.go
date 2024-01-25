@@ -9,7 +9,7 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/internal/frontendtype"
 	"github.com/consensys/gnark/internal/kvstore"
-	"github.com/consensys/gnark/std/internal/logderivarg"
+	"github.com/consensys/gnark/std/logderivarg"
 )
 
 type ctxCheckerKey struct{}
@@ -42,7 +42,7 @@ func newCommitRangechecker(api frontend.API, size int) *commitChecker {
 			panic("stored rangechecker is not valid")
 		}
 	}
-	cht := &commitChecker{ size: size }
+	cht := &commitChecker{size: size}
 	kv.SetKeyValue(ctxCheckerKey{}, cht)
 	api.Compiler().Defer(cht.commit)
 	return cht
