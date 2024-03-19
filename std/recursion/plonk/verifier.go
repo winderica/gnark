@@ -18,6 +18,7 @@ import (
 	"github.com/consensys/gnark/constraint"
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/std/algebra"
+	"github.com/consensys/gnark/std/algebra/algopts"
 	"github.com/consensys/gnark/std/algebra/emulated/sw_bls12381"
 	"github.com/consensys/gnark/std/algebra/emulated/sw_bn254"
 	"github.com/consensys/gnark/std/algebra/emulated/sw_bw6761"
@@ -28,6 +29,7 @@ import (
 	"github.com/consensys/gnark/std/math/bits"
 	"github.com/consensys/gnark/std/math/emulated"
 	"github.com/consensys/gnark/std/recursion"
+	"github.com/consensys/gnark/std/selector"
 )
 
 // Proof is a typed PLONK proof of SNARK. Use [ValueOfProof] to initialize the
@@ -775,9 +777,13 @@ func NewVerifier[FR emulated.FieldParams, G1El algebra.G1ElementT, G2El algebra.
 
 // PrepareVerification returns a list of (openingProof, commitment, point), which are to be
 // verified using kzg's BatchVerifyMultiPoints.
-func (v *Verifier[FR, G1El, G2El, GtEl]) PrepareVerification(vk VerifyingKey[FR, G1El, G2El], proof Proof[FR, G1El, G2El], witness Witness[FR]) ([]kzg.Commitment[G1El], []kzg.OpeningProof[FR, G1El], []emulated.Element[FR], error) {
+func (v *Verifier[FR, G1El, G2El, GtEl]) PrepareVerification(vk VerifyingKey[FR, G1El, G2El], proof Proof[FR, G1El, G2El], witness Witness[FR], opts ...VerifierOption) ([]kzg.Commitment[G1El], []kzg.OpeningProof[FR, G1El], []emulated.Element[FR], error) {
 
 	var fr FR
+	cfg, err := newCfg(opts...)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("apply options: %w", err)
+	}
 	if len(proof.Bsb22Commitments) != len(vk.Qcp) {
 		return nil, nil, nil, fmt.Errorf("BSB22 commitment number mismatch")
 	}
@@ -1001,11 +1007,20 @@ func (v *Verifier[FR, G1El, G2El, GtEl]) PrepareVerification(vk VerifyingKey[FR,
 		_s1, _s2, // second & third part
 	)
 
-	linearizedPolynomialDigest, err := v.curve.MultiScalarMul(points, scalars)
+	var msmOpts []algopts.AlgebraOption
+	if cfg.withCompleteArithmetic {
+		msmOpts = append(msmOpts, algopts.WithCompleteArithmetic())
+	}
+	linearizedPolynomialDigest, err := v.curve.MultiScalarMul(points, scalars, msmOpts...)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("linearized polynomial digest MSM: %w", err)
 	}
-	linearizedPolynomialDigest = v.curve.Add(linearizedPolynomialDigest, &vk.Qk.G1El) // Qk=0 in PLONK W\ Commit ==> use AddUnified
+	if cfg.withCompleteArithmetic {
+		// in PLONK Wo Commit ==> use AddUnified
+		linearizedPolynomialDigest = v.curve.AddUnified(linearizedPolynomialDigest, &vk.Qk.G1El)
+	} else {
+		linearizedPolynomialDigest = v.curve.Add(linearizedPolynomialDigest, &vk.Qk.G1El)
+	}
 
 	// Fold the first proof
 	digestsToFold := make([]kzg.Commitment[G1El], len(vk.Qcp)+7)
@@ -1037,9 +1052,9 @@ func (v *Verifier[FR, G1El, G2El, GtEl]) PrepareVerification(vk VerifyingKey[FR,
 
 // AssertProof asserts that the SNARK proof holds for the given witness and
 // verifying key.
-func (v *Verifier[FR, G1El, G2El, GtEl]) AssertProof(vk VerifyingKey[FR, G1El, G2El], proof Proof[FR, G1El, G2El], witness Witness[FR]) error {
+func (v *Verifier[FR, G1El, G2El, GtEl]) AssertProof(vk VerifyingKey[FR, G1El, G2El], proof Proof[FR, G1El, G2El], witness Witness[FR], opts ...VerifierOption) error {
 
-	commitments, proofs, points, err := v.PrepareVerification(vk, proof, witness)
+	commitments, proofs, points, err := v.PrepareVerification(vk, proof, witness, opts...)
 	if err != nil {
 		return err
 	}
@@ -1052,7 +1067,7 @@ func (v *Verifier[FR, G1El, G2El, GtEl]) AssertProof(vk VerifyingKey[FR, G1El, G
 }
 
 // AssertSameProofs asserts that multiple proofs for the same circuit are valid.
-func (v *Verifier[FR, G1El, G2El, GtEl]) AssertSameProofs(vk VerifyingKey[FR, G1El, G2El], proofs []Proof[FR, G1El, G2El], witnesses []Witness[FR]) error {
+func (v *Verifier[FR, G1El, G2El, GtEl]) AssertSameProofs(vk VerifyingKey[FR, G1El, G2El], proofs []Proof[FR, G1El, G2El], witnesses []Witness[FR], opts ...VerifierOption) error {
 	if len(proofs) != len(witnesses) {
 		return fmt.Errorf("proofs and witness length mismatch")
 	}
@@ -1066,7 +1081,7 @@ func (v *Verifier[FR, G1El, G2El, GtEl]) AssertSameProofs(vk VerifyingKey[FR, G1
 	var foldedProofs []kzg.OpeningProof[FR, G1El]
 	var foldedPoints []emulated.Element[FR]
 	for i := range proofs {
-		dg, pr, pts, err := v.PrepareVerification(vk, proofs[i], witnesses[i])
+		dg, pr, pts, err := v.PrepareVerification(vk, proofs[i], witnesses[i], opts...)
 		if err != nil {
 			return fmt.Errorf("prepare proof %d: %w", i, err)
 		}
@@ -1086,7 +1101,7 @@ func (v *Verifier[FR, G1El, G2El, GtEl]) AssertSameProofs(vk VerifyingKey[FR, G1
 // The proofs and witnesses are given in the argumens and must correspond to
 // each other.
 func (v *Verifier[FR, G1El, G2El, GtEl]) AssertDifferentProofs(bvk BaseVerifyingKey[FR, G1El, G2El], cvks []CircuitVerifyingKey[FR, G1El],
-	switches []frontend.Variable, proofs []Proof[FR, G1El, G2El], witnesses []Witness[FR]) error {
+	switches []frontend.Variable, proofs []Proof[FR, G1El, G2El], witnesses []Witness[FR], opts ...VerifierOption) error {
 	if len(proofs) != len(witnesses) || len(proofs) != len(switches) {
 		return fmt.Errorf("input lengths mismatch")
 	}
@@ -1101,7 +1116,7 @@ func (v *Verifier[FR, G1El, G2El, GtEl]) AssertDifferentProofs(bvk BaseVerifying
 		if err != nil {
 			return fmt.Errorf("switch verification key: %w", err)
 		}
-		dg, pr, pts, err := v.PrepareVerification(vk, proofs[i], witnesses[i])
+		dg, pr, pts, err := v.PrepareVerification(vk, proofs[i], witnesses[i], opts...)
 		if err != nil {
 			return fmt.Errorf("prepare proof %d: %w", i, err)
 		}
@@ -1217,7 +1232,8 @@ func (v *Verifier[FR, G1El, G2El, GtEl]) computeIthLagrangeAtZeta(exp frontend.V
 	return li
 }
 
-// SwitchVerificationKey returns a verification key by the index idx using the base verification key bvk and circuit specific verification key cvks[idx].
+// SwitchVerificationKey returns a verification key by the index idx using the
+// base verification key bvk and circuit specific verification key cvks[idx].
 func (v *Verifier[FR, G1El, G2El, GtEl]) SwitchVerificationKey(bvk BaseVerifyingKey[FR, G1El, G2El], idx frontend.Variable, cvks []CircuitVerifyingKey[FR, G1El]) (VerifyingKey[FR, G1El, G2El], error) {
 	var ret VerifyingKey[FR, G1El, G2El]
 	if len(cvks) == 0 {
@@ -1229,10 +1245,7 @@ func (v *Verifier[FR, G1El, G2El, GtEl]) SwitchVerificationKey(bvk BaseVerifying
 			CircuitVerifyingKey: cvks[0],
 		}, nil
 	}
-	if len(cvks) > 4 {
-		return ret, fmt.Errorf("large verification key switching not implemented yet")
-
-	}
+	nbIns := len(cvks)
 	nbCmts := len(cvks[0].CommitmentConstraintIndexes)
 	for i := range cvks {
 		if len(cvks[i].CommitmentConstraintIndexes) != nbCmts {
@@ -1242,30 +1255,61 @@ func (v *Verifier[FR, G1El, G2El, GtEl]) SwitchVerificationKey(bvk BaseVerifying
 			return ret, fmt.Errorf("inconsistent circuit verification key")
 		}
 	}
-	for i := len(cvks); i < 4; i++ {
-		cvks = append(cvks, ret.CircuitVerifyingKey)
+	sizeEls := make([]frontend.Variable, nbIns)
+	sizeInvEls := make([]*emulated.Element[FR], nbIns)
+	genEls := make([]*emulated.Element[FR], nbIns)
+	QlEls := make([]*G1El, nbIns)
+	QrEls := make([]*G1El, nbIns)
+	QmEls := make([]*G1El, nbIns)
+	QoEls := make([]*G1El, nbIns)
+	QkEls := make([]*G1El, nbIns)
+	var SEls [3][]*G1El
+	QcpEls := make([][]*G1El, nbCmts)
+	cmtIndicesEls := make([][]frontend.Variable, nbCmts)
+	for i := range SEls {
+		SEls[i] = make([]*G1El, nbIns)
+	}
+	for i := range QcpEls {
+		QcpEls[i] = make([]*G1El, nbIns)
+		cmtIndicesEls[i] = make([]frontend.Variable, nbIns)
+	}
+	for i := range cvks {
+		sizeEls[i] = cvks[i].Size
+		sizeInvEls[i] = &cvks[i].SizeInv
+		genEls[i] = &cvks[i].Generator
+		QlEls[i] = &cvks[i].Ql.G1El
+		QrEls[i] = &cvks[i].Qr.G1El
+		QmEls[i] = &cvks[i].Qm.G1El
+		QoEls[i] = &cvks[i].Qo.G1El
+		QkEls[i] = &cvks[i].Qk.G1El
+		for j := range SEls {
+			SEls[j][i] = &cvks[i].S[j].G1El
+		}
+		for j := range QcpEls {
+			QcpEls[j][i] = &cvks[i].Qcp[j].G1El
+			cmtIndicesEls[j][i] = cvks[i].CommitmentConstraintIndexes[j]
+		}
 	}
 	cvk := CircuitVerifyingKey[FR, G1El]{
+		Size:      selector.Mux(v.api, idx, sizeEls...),
+		SizeInv:   *v.scalarApi.Mux(idx, sizeInvEls...),
+		Generator: *v.scalarApi.Mux(idx, genEls...),
+		S: [3]kzg.Commitment[G1El]{
+			{G1El: *v.curve.Mux(idx, SEls[0]...)},
+			{G1El: *v.curve.Mux(idx, SEls[1]...)},
+			{G1El: *v.curve.Mux(idx, SEls[2]...)},
+		},
+		Ql:                          kzg.Commitment[G1El]{G1El: *v.curve.Mux(idx, QlEls...)},
+		Qr:                          kzg.Commitment[G1El]{G1El: *v.curve.Mux(idx, QrEls...)},
+		Qm:                          kzg.Commitment[G1El]{G1El: *v.curve.Mux(idx, QmEls...)},
+		Qo:                          kzg.Commitment[G1El]{G1El: *v.curve.Mux(idx, QoEls...)},
+		Qk:                          kzg.Commitment[G1El]{G1El: *v.curve.Mux(idx, QkEls...)},
 		Qcp:                         make([]kzg.Commitment[G1El], nbCmts),
 		CommitmentConstraintIndexes: make([]frontend.Variable, nbCmts),
 	}
-	bIdx := bits.ToBinary(v.api, idx, bits.WithNbDigits(2))
-	cvk.Size = v.api.Lookup2(bIdx[0], bIdx[1], cvks[0].Size, cvks[1].Size, cvks[2].Size, cvks[3].Size)
-	cvk.SizeInv = *v.scalarApi.Lookup2(bIdx[0], bIdx[1], &cvks[0].SizeInv, &cvks[1].SizeInv, &cvks[2].SizeInv, &cvks[3].SizeInv)
-	cvk.Generator = *v.scalarApi.Lookup2(bIdx[0], bIdx[1], &cvks[0].Generator, &cvks[1].Generator, &cvks[2].Generator, &cvks[3].Generator)
-	for i := range cvk.S {
-		cvk.S[i].G1El = *v.curve.Lookup2(bIdx[0], bIdx[1], &cvks[0].S[i].G1El, &cvks[1].S[i].G1El, &cvks[2].S[i].G1El, &cvks[3].S[i].G1El)
-	}
-	cvk.Ql.G1El = *v.curve.Lookup2(bIdx[0], bIdx[1], &cvks[0].Ql.G1El, &cvks[1].Ql.G1El, &cvks[2].Ql.G1El, &cvks[3].Ql.G1El)
-	cvk.Qr.G1El = *v.curve.Lookup2(bIdx[0], bIdx[1], &cvks[0].Qr.G1El, &cvks[1].Qr.G1El, &cvks[2].Qr.G1El, &cvks[3].Qr.G1El)
-	cvk.Qm.G1El = *v.curve.Lookup2(bIdx[0], bIdx[1], &cvks[0].Qm.G1El, &cvks[1].Qm.G1El, &cvks[2].Qm.G1El, &cvks[3].Qm.G1El)
-	cvk.Qo.G1El = *v.curve.Lookup2(bIdx[0], bIdx[1], &cvks[0].Qo.G1El, &cvks[1].Qo.G1El, &cvks[2].Qo.G1El, &cvks[3].Qo.G1El)
-	cvk.Qk.G1El = *v.curve.Lookup2(bIdx[0], bIdx[1], &cvks[0].Qk.G1El, &cvks[1].Qk.G1El, &cvks[2].Qk.G1El, &cvks[3].Qk.G1El)
-	for i := range cvk.Qcp {
-		cvk.Qcp[i].G1El = *v.curve.Lookup2(bIdx[0], bIdx[1], &cvks[0].Qcp[i].G1El, &cvks[1].Qcp[i].G1El, &cvks[2].Qcp[i].G1El, &cvks[3].Qcp[i].G1El)
-	}
-	for i := range cvk.CommitmentConstraintIndexes {
-		cvk.CommitmentConstraintIndexes[i] = v.api.Lookup2(bIdx[0], bIdx[1], cvks[0].CommitmentConstraintIndexes[i], cvks[1].CommitmentConstraintIndexes[i], cvks[2].CommitmentConstraintIndexes[i], cvks[3].CommitmentConstraintIndexes[i])
+	for i := range QcpEls {
+		cvk.Qcp[i] = kzg.Commitment[G1El]{G1El: *v.curve.Mux(idx, QcpEls[i]...)}
+		cvk.CommitmentConstraintIndexes[i] = selector.Mux(v.api, idx, cmtIndicesEls[i]...)
 	}
 	return VerifyingKey[FR, G1El, G2El]{
 		BaseVerifyingKey:    bvk,
