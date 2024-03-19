@@ -7,7 +7,7 @@ import (
 
 	"github.com/consensys/gnark/constraint/solver"
 	"github.com/consensys/gnark/frontend"
-	"github.com/consensys/gnark/internal/frontendtype"
+	"github.com/consensys/gnark/frontend/frontendtype"
 	"github.com/consensys/gnark/internal/kvstore"
 	"github.com/consensys/gnark/std/logderivarg"
 )
